@@ -1,9 +1,10 @@
 import os
 import hashlib
-import textwrap
 import streamlit as st
 from openai import OpenAI
 from extract_text import extract_text
+
+from rag_pipeline import build_messages, get_docs
 
 client = OpenAI(
     api_key=os.environ["API_KEY"],
@@ -13,10 +14,9 @@ client = OpenAI(
 st.set_page_config(page_title="📝 Multi-Doc Q&A", layout="centered")
 st.title("📝 File Q&A")
 
-# --- Session state setup ---
+# --- Session state ---
 if "messages" not in st.session_state:
     st.session_state["messages"] = [{"role": "assistant", "content": "Ask something about the article"}]
-
 if "docs" not in st.session_state:
     st.session_state["docs"] = {}
 
@@ -26,51 +26,25 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True,
 )
 
-# --- Ingest newly uploaded files ---
 def _doc_id_for(file_name: str, content: str) -> str:
     h = hashlib.sha1()
     h.update(file_name.encode("utf-8"))
     h.update(str(len(content)).encode("utf-8"))
     return h.hexdigest()[:12]
 
+# Ingest uploads
 if uploaded_files:
     for uf in uploaded_files:
-        # Important: each read consumes the buffer – reset afterward so Streamlit can re-use it
         content = extract_text(uf)
         uf.seek(0)
-
         if not content.strip():
             st.warning(f"Could not extract text from **{uf.name}** (skipping).")
             continue
-
         doc_id = _doc_id_for(uf.name, content)
         st.session_state["docs"][doc_id] = {"name": uf.name, "content": content}
 
-# --- Helper: safe truncation of large context ---
-def truncate_context(text: str, max_chars: int = 120_000) -> str:
-    if len(text) <= max_chars:
-        return text
-    # Keep head and tail to retain beginnings and conclusions
-    head = text[: int(max_chars * 0.6)]
-    tail = text[-int(max_chars * 0.2) :]
-    middle_note = "\n\n...[truncated to fit model context]...\n\n"
-    return head + middle_note + tail
-
-# --- Helper: OpenAI stream → text chunks ---
-def openai_text_chunks(openai_stream):
-    for ev in openai_stream:
-        # Chat Completions (OpenAI 1.x) shape
-        try:
-            delta = ev.choices[0].delta
-            if getattr(delta, "content", None):
-                yield delta.content
-                continue
-        except Exception:
-            pass
-        # If your proxy uses a different event shape, ignore non-text safely.
-
-# --- UI: Render prior conversation (show which docs were used for user messages) ---
-for msg in st.session_state.messages:
+# Render history
+for msg in st.session_state["messages"]:
     with st.chat_message(msg["role"]):
         st.write(msg["content"])
         if msg.get("role") == "user" and msg.get("doc_ids"):
@@ -78,76 +52,96 @@ for msg in st.session_state.messages:
             if labels:
                 st.caption("Used: " + " • ".join(labels))
 
-# --- Document toggle row (only if we have docs) ---
 docs_present = len(st.session_state["docs"]) > 0
 
+# --- Always show toggles above chat input ---
+# with st.container():
 selected_doc_ids = []
 if docs_present:
     st.markdown("**Select which document(s) to query:**")
-    doc_items = list(st.session_state["docs"].items())  # [(doc_id, {name, content}), ...]
-    # Make a single-row grid of toggles
-    cols = st.columns(min(4, len(doc_items)))  # up to 4 columns; rest wrap to new line
-    # We collect toggles but keep state keys stable across reruns
+    items = list(st.session_state["docs"].items())
+    cols = st.columns(min(4, len(items)))
     toggled = {}
-    for idx, (doc_id, meta) in enumerate(doc_items):
+    for idx, (doc_id, meta) in enumerate(items):
         col = cols[idx % len(cols)]
         with col:
             key = f"toggle_{doc_id}"
-            # default to True when first created
-            if key not in st.session_state:
-                st.session_state[key] = True
-            toggled[doc_id] = st.toggle(meta["name"], value=st.session_state[key], key=key)
-    # Compute the selected list
+            default_on = st.session_state.get(key, True)
+            toggled[doc_id] = st.toggle(meta["name"], value=default_on, key=key)
     selected_doc_ids = [doc_id for doc_id, on in toggled.items() if on]
+else:
+    st.markdown("*Upload documents above to enable toggles.*")
 
-# --- Chat input (only appears AFTER at least one doc uploaded) ---
-placeholder = "Upload document(s) above to start." if not docs_present else "Ask something about your uploaded documents."
+# --- Chat input sits directly below the toggles ---
+placeholder = (
+    "Upload document(s) above to start."
+    if not docs_present
+    else "Ask something about your uploaded documents."
+)
 prompt = st.chat_input(placeholder, disabled=not docs_present)
 
-# --- On submit: build context from selected docs, stream answer, and record selection per question ---
+# # Multi-select toggles
+# selected_doc_ids = []
+# if docs_present:
+#     st.markdown("**Select which document(s) to query:**")
+#     items = list(st.session_state["docs"].items())
+#     cols = st.columns(min(4, len(items)))
+#     toggled = {}
+#     for idx, (doc_id, meta) in enumerate(items):
+#         col = cols[idx % len(cols)]
+#         with col:
+#             key = f"toggle_{doc_id}"
+#             # IMPORTANT: don't pre-set st.session_state[key] here.
+#             default_on = st.session_state.get(key, True)  # read only
+#             toggled[doc_id] = st.toggle(meta["name"], value=default_on, key=key)
+#     selected_doc_ids = [doc_id for doc_id, on in toggled.items() if on]
+
+# placeholder = "Upload document(s) above to start." if not docs_present else "Ask something about your uploaded documents."
+
+# prompt = st.chat_input(placeholder, disabled=not docs_present)
+
 if prompt and docs_present:
-    # Append user message (and attach which docs they selected for this question)
-    st.session_state.messages.append({"role": "user", "content": prompt, "doc_ids": selected_doc_ids})
+    # 1) Show the *current* user message immediately
+    with st.chat_message("user"):
+        st.write(prompt)
+        if selected_doc_ids:
+            labels = [st.session_state["docs"][i]["name"] for i in selected_doc_ids if i in st.session_state["docs"]]
+            if labels:
+                st.caption("Used: " + " • ".join(labels))
 
-    # Build system context from the chosen docs (only those toggled ON right now)
-    if not selected_doc_ids:
+    # 2) Persist it for future reruns
+    st.session_state["messages"].append({"role": "user", "content": prompt, "doc_ids": selected_doc_ids})
+
+    # 3) Retrieval
+    named_texts = [(st.session_state["docs"][i]["name"], st.session_state["docs"][i]["content"])
+                   for i in selected_doc_ids if i in st.session_state["docs"]]
+
+    if not named_texts:
         st.warning("You didn't select any documents. I’ll answer without document context.")
-        combined = ""
+        retrieved_docs = []
     else:
-        # Delimit each doc clearly
-        parts = []
-        for doc_id in selected_doc_ids:
-            meta = st.session_state["docs"].get(doc_id)
-            if not meta:
-                continue
-            parts.append(
-                f"--- BEGIN DOCUMENT: {meta['name']} ---\n{meta['content']}\n--- END DOCUMENT: {meta['name']} ---\n"
-            )
-        combined = "\n".join(parts)
+        retrieved_docs = get_docs(named_texts, prompt)
 
-    system_msg = {
-        "role": "system",
-        "content": textwrap.dedent(f"""
-            You are a helpful assistant that answers questions strictly based on the provided documents when they are present.
-            If the answer is not found in the documents, say you don't have enough info from the uploaded files.
-            Here are the documents (may be truncated):
-            {truncate_context(combined)}
-        """).strip(),
-    }
+    messages = build_messages(prompt, retrieved_docs)
+
+    def openai_text_chunks(openai_stream):
+        for ev in openai_stream:
+            try:
+                delta = ev.choices[0].delta
+                if getattr(delta, "content", None):
+                    yield delta.content
+            except Exception:
+                pass
 
     with st.chat_message("assistant"):
         raw_stream = client.chat.completions.create(
             model="openai.gpt-4o",
-            messages=[system_msg] + [
-                # Only include role/content for the visible conversation
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state["messages"]
-            ],
+            messages=messages,
             stream=True,
         )
         response_text = st.write_stream(openai_text_chunks(raw_stream))
 
-    st.session_state.messages.append({"role": "assistant", "content": response_text})
+    st.session_state["messages"].append({"role": "assistant", "content": response_text})
 
 
 # import streamlit as st
