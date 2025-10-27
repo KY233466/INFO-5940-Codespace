@@ -1,10 +1,10 @@
 # RAG APP 
-This application allows the user to upload multiple documents that are either pdf or txt. It would generate RAG database for the uploaded documents, and the user could choose which ones to engage for a specific question with the toggles. A historical reference of which documents were choosen to be engaged with under the user's questions.
+This application allows the user to upload multiple documents that are either pdf or txt. It would generate RAG database for the uploaded documents, and the user could choose which ones to engage for a specific question with the toggles. A historical reference of which documents were choosen to be engaged with are shown under the user's questions.
 
 # Changes made to the provided configurations
 Specified pandas version and added PyPDF2
 
-## Getting Started
+# Getting Started
 
 ### Step 1: Open your forked repo Codespace
 1. Click the green **Code** button and switch to the **Codespaces** tab.  
