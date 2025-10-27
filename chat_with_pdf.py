@@ -3,8 +3,7 @@ import hashlib
 import streamlit as st
 from openai import OpenAI
 from extract_text import extract_text
-
-from rag_pipeline import build_messages, get_docs
+from rag_pipeline import build_messages, build_retriever_for_doc, retrieve_across
 
 client = OpenAI(
     api_key=os.environ["API_KEY"],
@@ -20,6 +19,8 @@ if "messages" not in st.session_state:
     ]
 if "docs" not in st.session_state:
     st.session_state["docs"] = {}
+if "retrievers" not in st.session_state:
+    st.session_state["retrievers"] = {}
 
 uploaded_files = st.file_uploader(
     "Upload one or more documents (.txt or .pdf)",
@@ -34,6 +35,7 @@ def _doc_id_for(file_name: str, content: str) -> str:
     h.update(str(len(content)).encode("utf-8"))
     return h.hexdigest()[:12]
 
+# Ingest uploads and build per-doc retrievers
 if uploaded_files:
     for uf in uploaded_files:
         content = extract_text(uf)
@@ -41,8 +43,16 @@ if uploaded_files:
         if not content.strip():
             st.warning(f"Could not extract text from **{uf.name}** (skipping).")
             continue
+
         doc_id = _doc_id_for(uf.name, content)
         st.session_state["docs"][doc_id] = {"name": uf.name, "content": content}
+
+        # Build a retriever once per document (on first see or if doc content changed -> new id)
+        if doc_id not in st.session_state["retrievers"]:
+            st.session_state["retrievers"][doc_id] = build_retriever_for_doc(
+                name=uf.name,
+                content=content,
+            )
 
 docs_present = len(st.session_state["docs"]) > 0
 
@@ -125,12 +135,12 @@ if prompt and docs_present:
     )
 
     # Retrieval
-    named_texts = [
-        (st.session_state["docs"][i]["name"], st.session_state["docs"][i]["content"])
-        for i in selected_doc_ids
-        if i in st.session_state["docs"]
+    selected_retrievers = [
+        st.session_state["retrievers"][doc_id]
+        for doc_id in selected_doc_ids
+        if doc_id in st.session_state["retrievers"]
     ]
-    retrieved_docs = get_docs(named_texts, prompt) if named_texts else []
+    retrieved_docs = retrieve_across(selected_retrievers, prompt, k_each=10) if selected_retrievers else []
 
     # Build RAG messages
     messages = build_messages(prompt, retrieved_docs)
