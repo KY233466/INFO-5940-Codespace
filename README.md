@@ -1,5 +1,7 @@
 # RAG APP 
-This application allows the user to upload multiple documents that are either pdf or txt. It would generate RAG database for the uploaded documents, and the user could choose which ones to engage for a specific question with the toggles. A historical reference of which documents were choosen to be engaged with are shown under the user's questions.
+This application enables users to upload multiple documents in either PDF or TXT format. For each uploaded document, a dedicated RAG database is automatically created, allowing the system to retrieve information specific to that document.
+
+During a conversation, users can selectively choose which documents to include in the retrieval process using on-screen toggles. The chatbot then generates responses grounded only in the selected documents. For transparency, each user message displays a “Document used:” label showing which documents were referenced for that question.
 
 # Changes made to the provided configurations
 Specified pandas version and added PyPDF2

@@ -1,30 +1,32 @@
 # rag_pipeline.py
 from typing import List, Dict, Any
-from retrieval import format_docs
+import os
+from retrieval import format_docs, get_retriever
 from chunking import split_named_texts
 from vectorstore import build_ephemeral_vectorstore
-from retrieval import get_retriever
 
-def build_retriever_for_doc(name: str, content: str, *, k: int = 20):
+def build_retriever_for_doc(doc_id: str, name: str, content: str, *, k: int = 20):
     """
     Build a retriever for a single document.
-    Called once per upload; the caller should cache/reuse this object.
+    Isolation is achieved by giving each doc its own persist_dir.
     """
     chunks = split_named_texts([(name, content)], chunk_size=200, chunk_overlap=0)
-    vs = build_ephemeral_vectorstore(chunks, persist_dir=None)
+
+    per_doc_dir = os.path.join(".chroma", f"doc_{doc_id}")
+    os.makedirs(per_doc_dir, exist_ok=True)
+
+    vs = build_ephemeral_vectorstore(
+        chunks,
+        persist_dir=per_doc_dir,
+    )
     return get_retriever(vs, k=k)
 
 def retrieve_across(retrievers: List[Any], query: str, *, k_each: int = 10):
-    """
-    Query multiple retrievers and merge results.
-    Simple concat; you can add ranking/dup filtering later if desired.
-    """
     hits = []
     for r in retrievers:
         try:
             hits.extend(r.invoke(query)[:k_each])
         except Exception:
-            # If any single retriever fails, keep going
             continue
     return hits
 
