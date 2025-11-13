@@ -1,1 +1,9 @@
+Implementing a multi-agent workflow helped me understand how separating roles can produce more reliable and structured outputs than relying on a single large prompt. Designing the Planner Agent as the creative draft generator and the Reviewer Agent as a fact-checking validator created a clear pipeline where each component had a distinct purpose. This made the system easier to debug and ensured the final itinerary was not only detailed but also feasible.
 
+One major challenge was handling environment variables inside the Codespaces dev container. Even though my .env file contained my keys, the app kept producing authentication errors. I eventually learned that the container doesn’t always load .env properly, so I added the keys to remoteEnv in devcontainer.json and rebuilt the environment. Confirming the variables with echo $OPENAI_API_KEY inside the container helped me verify that they were finally being loaded correctly.
+
+Another challenge was designing the Reviewer prompt so it wouldn’t overuse the internet_search tool. Initially, it tended to call the tool too often, so I refined the instructions to emphasize priority-based searches and to avoid looking up trivial details like restaurant hours. I also locked down the format: forcing a Delta List and requiring that the Reviewer not change the overall structure of the itinerary. This produced far more stable and predictable results.
+
+Creatively, I added a friendly, emoji-using persona to the Planner to make the itinerary feel more human, while keeping the Reviewer strictly analytical. This contrast made the collaboration between the agents more natural and easier to interpret.
+
+External tools / GenAI used: ChatGPT helped refine prompts, debug environment variable issues, and polish final text.
